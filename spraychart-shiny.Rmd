@@ -1,0 +1,257 @@
+---
+title: "spray-shiny"
+output: html_document
+date: '2022-07-22'
+---
+
+```{r data}
+#devtools::install_github("BillPetti/baseballr")
+library(baseballr)
+library(tidyverse)
+library(ggplot2)
+library(reshape2)
+start <- "2022-04-07"
+current <- Sys.Date()
+br_data <- daily_batter_bref(start, current)
+savant <- scrape_statcast_savant_batter_all(start, current) %>%
+  mutate(result = case_when(grepl("out", des) | grepl("error", des) | grepl("fielder's choice", des) ~ "Out",
+                            grepl("single", des) ~"Single",
+                            grepl("double", des) ~"Double",
+                            grepl("triple", des) ~ "Triple",
+                            grepl("homer", des) | grepl("grand slam", des)~ "Homerun"),
+         first_last = paste(gsub("^.+\\,","", player_name),gsub("\\,.+$","", player_name),sep=" "))
+
+
+#Ian Happ br_data for testing purposes
+happ <- br_data %>% 
+          filter(Name == "Ian Happ") %>% 
+           rename("Singles"=X1B,
+                  "Doubles"=X2B,
+                  "Triples"=X3B) %>% 
+           select(Name, Age, Team, G, PA, AB, R, H, Singles, Doubles, Triples, HR, RBI, BB, SO, HBP, SB, BA, OBP, SLG, OPS)
+
+#league average data table
+league_ave <- br_data %>%
+  filter(!is.na(BA)) %>% 
+  summarise(Age = round(mean(Age), 1), G = round(mean(G), 1), PA = round(mean(PA), 1), AB = round(mean(AB), 1),
+            R = round(mean(R), 1), H = round(mean(H), 1), Singles = round(mean(X1B), 1), Doubles = round(mean(X2B), 1), 
+            Triples = round(mean(X3B), 1), HR = round(mean(HR), 1), RBI = round(mean(RBI), 1), BB = round(mean(BB), 1), 
+            SO = round(mean(SO), 1), SB = round(mean(SB), 1), BA = round(sum(br_data$H)/sum(br_data$AB), 3), 
+            OBP = round((sum(br_data$H)+sum(br_data$BB)+sum(br_data$HBP))/(sum(br_data$AB)+sum(br_data$BB)+sum(br_data$HBP)+sum(SF)), 3), 
+            SLG = round((sum(X1B)+2*sum(X2B)+3*sum(X3B)+4*sum(br_data$HR))/sum(br_data$AB), 3),
+            OPS = round(OBP+SLG, 3))
+
+#get qualifying list of players
+qualifiers <- br_data %>%
+  mutate(ABPG = AB/G) %>% #should be 3.1AB/Team game played, but not sure how to get that
+  filter(ABPG >= 3.1)
+
+```
+
+```{r functions}
+#graphing slashline bargraph
+graph_slashline2 = function(pt){
+  nt <- data.frame(type=c("AVG", "AVG", "OBP", "OBP", "SLG", "SLG", "OPS", "OPS"),
+                   temp =c(pt$Name, "LgAvg", pt$Name, "LgAvg", pt$Name, "LgAvg", pt$Name, "LgAvg"),
+                   data = c(pt$BA, league_ave$BA, pt$OBP, league_ave$OBP, pt$SLG, league_ave$SLG, pt$OPS, league_ave$OPS))
+  ggplot(nt, aes(x=factor(type, level=c("AVG", "OBP", "SLG", "OPS")), y=data, fill=temp))+
+    geom_col(position = position_dodge())+
+    scale_fill_manual(values= c("#3db5ff", "#0099f9"), name ="")+
+    geom_text(aes(label=data), position = position_dodge(0.9), vjust=-.5, size = 4)+
+    labs(x="", y="", title = paste0("Slash Line of ", pt$Name, " Against League Average"))
+}
+
+#test--move out after
+graph_slashline2(happ)
+
+
+#Gets stat rankings
+calc_rank = function(pt, stat){
+  if(stat %in% c("BA", "OBP", "SLG", "OPS")){
+    temp=qualifiers[order(desc(qualifiers[,stat])),]
+    ret = list(which(temp$Name == pt$Name), round(which(temp$Name == pt$Name)*100/nrow(temp), 2))
+  }
+  else{
+    temp=br_data[order(desc(br_data[,stat])),]
+    ret =  which(temp$Name == pt$Name)
+  }
+  return(ret)
+}
+
+#test--move out later 
+calc_rank(happ, "BA")
+
+#Get spray chart
+spraychart <- function(pt)
+  ggspraychart(
+    pt,
+    x_value = "hc_x",
+    y_value = "-hc_y",
+    fill_value = "result",
+    point_size = 2.5
+  ) +
+  scale_fill_manual(breaks = c("Out", "Single", "Double", "Triple", "Homerun"), 
+                    values= c("#c62828", "#fdd835", "#1976d2", "#388e3c", "#ffa726"), 
+                    name="")
+
+savant_ia2 %>% 
+  count(if_fielding_alignment)
+
+#get shift percentage
+shift_perc = function(pt, pt2){
+  shift <- pt %>% 
+    filter(if_fielding_alignment != "Standard") %>% 
+    count()
+  
+  ab_shift <- pt %>% 
+    filter(if_fielding_alignment != "Standard",
+           events != "") %>% 
+    count()
+  
+  if_shift <- pt %>% 
+    filter(if_fielding_alignment == "Infield shift") %>% 
+    count()
+  
+  ab_if_shift <- pt %>% 
+    filter(if_fielding_alignment == "Infield shift",
+           events != "") %>% 
+    count()
+  
+  strat_shift <- pt %>% 
+    filter(if_fielding_alignment == "Strategic") %>% 
+    count()
+  
+  ab_strat_shift <- pt %>% 
+    filter(if_fielding_alignment == "Strategic",
+           events != "") %>% 
+    count()
+  
+  perc_byplay = round(shift$n*100/nrow(pt), 2)
+  perc_byab = round(ab_shift$n*100/pt2$AB, 2)
+  perc_standard_byplay = round(if_shift$n*100/nrow(pt), 2) #maybe shift?
+  perc_standard_byab = round(ab_if_shift$n*100/pt2$AB, 2)
+  perc_strategic_byplay = round(strat_shift$n*100/nrow(pt), 2)
+  perc_strategic_byab = round(ab_strat_shift$n*100/pt2$AB, 2)
+  
+  ret = data.frame(perc_byplay, perc_byab, perc_standard_byplay, perc_standard_byab, perc_strategic_byplay, perc_strategic_byab)
+  return(ret)
+}
+
+shift_perc(savant_ia2, happ)
+
+
+
+```
+
+```{r}
+library(shiny)
+
+run_shiny = function() {
+  shinyApp(
+    ui = fluidPage(
+      titlePanel("MLB Player Database"),
+      mainPanel(tabsetPanel(
+        tabPanel(
+          "Stat page",
+          sidebarPanel(
+            textInput("player1", "Choose a Player:"),
+            actionButton("run1", "Generate")
+          ),
+          uiOutput("text1"),
+          tableOutput("main_stats"),
+          plotOutput("slash")
+        ),
+        tabPanel(
+          "Hit distrubion",
+          sidebarPanel(
+            textInput("player2", "Choose a Player:"),
+            actionButton("run2", "Generate")),
+          uiOutput("text2"),
+          plotOutput("spray", width = 500, height = 500)
+        )
+      )
+      )
+    ),
+    server = function(input, output, session) {
+      
+      #stats panel
+      observeEvent(input$run1, {
+        if(input$player1 %in% br_data$Name){
+          
+          #get tables
+          #first_last <- as.data.frame(str_split(input$player1, ' '))
+          #player_id_table <- playerid_lookup(first_last[2, 1], first_last[1, 1])
+          #player_savant_table <- scrape_statcast_savant_batter(start, current, player_id_table$mlbam_id)
+          curr_player_br_table <- br_data %>% 
+            filter(Name == input$player1) %>% 
+            rename("Singles"=X1B,
+                   "Doubles"=X2B,
+                   "Triples"=X3B) %>%
+            mutate(Age = as.integer(Age), G = as.integer(G), PA = as.integer(PA), AB=as.integer(AB),R=as.integer(R),
+                   H=as.integer(H), Singles=as.integer(Singles), Doubles=as.integer(Doubles), Triples = as.integer(Triples),
+                   HR=as.integer(HR), RBI = as.integer(RBI), BB=as.integer(BB), SO=as.integer(SO), HBP=as.integer(HBP),
+                   SB=as.integer(SB), BA = round(BA, 3), OBP = round(OBP, 3), SLG=round(SLG, 3), OPS=round(OPS,3)) %>% 
+            select(Name, Age, Team, G, PA, AB, R, H, Singles, Doubles, Triples, HR, RBI, BB, SO, HBP, SB, BA, OBP, SLG, OPS)
+          
+          #
+          if(input$player1 %in% qualifiers$Name){
+            output$text1 <- renderText(
+              paste0("<b>", input$player1, " ranks:", "</b>", "<br>",
+                     "No. ", calc_rank(curr_player_br_table, "R"), " in runs,", "<br>",
+                     "No. ", calc_rank(curr_player_br_table, "H"), " in hits,", "<br>", 
+                     "No. ", calc_rank(curr_player_br_table, "RBI"), " in RBIs,", "<br>", 
+                     "No. ", calc_rank(curr_player_br_table, "BA")[[1]][1], " in batting average (top ", calc_rank(curr_player_br_table, "BA")[[2]][1], "%),", "<br>", 
+                     "No. ", calc_rank(curr_player_br_table, "OBP")[[1]][1], " in on-base percentage (top ", calc_rank(curr_player_br_table, "OBP")[[2]][1], "%),", "<br>", 
+                     "No. ", calc_rank(curr_player_br_table, "SLG")[[1]][1], " in slugging percentage (top ", calc_rank(curr_player_br_table, "SLG")[[2]][1], "%),", "<br>", 
+                     " No. ", calc_rank(curr_player_br_table, "OPS")[[1]][1], " in on-base + slugging (top ", calc_rank(curr_player_br_table, "OPS")[[2]][1], "%).", "<br>", 
+                     "*Amoung qualified players"))
+          }
+          else{
+            output$text1 <- renderText(paste0("<b>", input$player1, " ranks No.", "</b>", calc_rank(curr_player_br_table, "R")[1], " in runs, No.", calc_rank(curr_player_br_table, "H")[1], " in hits, No.", calc_rank(curr_player_br_table, "RBI")[1], " in RBIs."))
+          }
+          output$main_stats <- renderTable(curr_player_br_table)
+          output$slash <- renderPlot(graph_slashline2(curr_player_br_table))
+        }
+        else output$text1 <- renderText("Please enter a valid player name.")
+      })
+      
+      #spray chart panel
+      observeEvent(input$run2, {
+        if(input$player2 %in% br_data$Name){
+          first_last <- as.data.frame(str_split(input$player2, ' '))
+          player_id_table <- playerid_lookup(first_last[2, 1], first_last[1, 1]) 
+          player_savant_table <- scrape_statcast_savant_batter(start, current, player_id_table$mlbam_id) %>% 
+            filter(!is.na(hc_x)) %>% 
+            mutate(result = case_when(grepl("out", des) | grepl("error", des) | grepl("fielder's choice", des) ~ "Out",
+                                      grepl("single", des) ~"Single",
+                                      grepl("double", des) ~"Double",
+                                      grepl("triple", des) ~ "Triple",
+                                      grepl("homer", des) | grepl("grand slam", des)~ "Homerun"))
+          curr_player_br_table <- br_data %>% 
+            filter(Name == input$player2) %>% 
+            rename("Singles"=X1B,
+                   "Doubles"=X2B,
+                   "Triples"=X3B) %>%
+            mutate(Age = as.integer(Age), G = as.integer(G), PA = as.integer(PA), AB=as.integer(AB),R=as.integer(R),
+                   H=as.integer(H), Singles=as.integer(Singles), Doubles=as.integer(Doubles), Triples = as.integer(Triples),
+                   HR=as.integer(HR), RBI = as.integer(RBI), BB=as.integer(BB), SO=as.integer(SO), HBP=as.integer(HBP),
+                   SB=as.integer(SB), BA = round(BA, 3), OBP = round(OBP, 3), SLG=round(SLG, 3), OPS=round(OPS,3)) %>% 
+            select(Name, Age, Team, G, PA, AB, R, H, Singles, Doubles, Triples, HR, RBI, BB, SO, HBP, SB, BA, OBP, SLG, OPS)
+          
+          player_shifts = shift_perc(player_savant_table, curr_player_br_table)
+          
+          output$text2 <- renderText(paste0("<b>", input$player2, " has been shifted on ",  "</b>", player_shifts$perc_byab, "% of his at-bats (",
+                                            player_shifts$perc_standard_byab, "-", player_shifts$perc_strategic_byab, ", Standard-stretegic shifts)."))
+          output$spray <- renderPlot(spraychart(player_savant_table))
+        }
+        else output$text1 <- renderText("Please enter a valid player name.")
+      })
+      
+    }
+  )
+}
+
+run_shiny()
+    
+```
+
