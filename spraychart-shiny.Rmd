@@ -105,7 +105,12 @@ shift_perc = function(pt, pt2){
   
   ab_shift <- pt %>% 
     filter(if_fielding_alignment != "Standard",
-           events != "") %>% 
+           events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b",
+           events != "walk",
+           events != "hit_by_pitch",
+           events != "sac_fly") %>% 
     count()
   
   if_shift <- pt %>% 
@@ -114,7 +119,12 @@ shift_perc = function(pt, pt2){
   
   ab_if_shift <- pt %>% 
     filter(if_fielding_alignment == "Infield shift",
-           events != "") %>% 
+           events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b",
+           events != "walk",
+           events != "hit_by_pitch",
+           events != "sac_fly") %>% 
     count()
   
   strat_shift <- pt %>% 
@@ -123,7 +133,12 @@ shift_perc = function(pt, pt2){
   
   ab_strat_shift <- pt %>% 
     filter(if_fielding_alignment == "Strategic",
-           events != "") %>% 
+           events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b",
+           events != "walk",
+           events != "hit_by_pitch",
+           events != "sac_fly") %>% 
     count()
   
   perc_byplay = round(shift$n*100/nrow(pt), 2)
@@ -137,8 +152,51 @@ shift_perc = function(pt, pt2){
   return(ret)
 }
 
-shift_perc(savant_ia2, happ)
+get_shift_stats = function(pt){
+  temp <- pt %>% 
+    filter(events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b",
+           if_fielding_alignment != "Standard") %>% 
+    mutate(hit = case_when(events == "single" | events == "double" | events == "triple" | events == "home_run" ~ "Y",
+                           TRUE ~ "N"))
+  ab_ws = (nrow(temp)-sum(temp$events=="hit_by_pitch")-sum(temp$events == "sac_fly")-sum(temp$events == "walk"))
+  ba_ws = round(sum(temp$hit == "Y")/ab_ws, 3)
+  obp_ws = round((sum(temp$hit == "Y")+sum(temp$events == "walk")+sum(temp$events == "hit_by_pitch")) /nrow(temp), 3)
+  slg_ws = round((sum(temp$events == "single")+2*sum(temp$events == "double")+3*sum(temp$events == "triple")+4*sum(temp$events == "home_run"))/ab_ws, 3)
+  ops_ws = round(obp_ws+slg_ws, 3)
+  
+  temp2 <- pt %>% 
+    filter(events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b",
+           if_fielding_alignment == "Standard") %>% 
+    mutate(hit = case_when(events == "single" | events == "double" | events == "triple" | events == "home_run" ~ "Y",
+                           TRUE ~ "N"))
+  
+  ab_wos = (nrow(temp2)-sum(temp2$events=="hit_by_pitch")-sum(temp2$events == "sac_fly")-sum(temp2$events == "walk"))
+  ba_wos = round(sum(temp2$hit == "Y")/ab_wos, 3)
+  obp_wos = round((sum(temp2$hit == "Y")+sum(temp2$events == "walk")+sum(temp2$events == "hit_by_pitch")) /nrow(temp2), 3)
+  slg_wos = round((sum(temp2$events == "single")+2*sum(temp2$events == "double")+3*sum(temp2$events == "triple")+4*sum(temp2$events == "home_run"))/ab_wos, 3)
+  ops_wos = round(obp_wos+slg_wos, 3)
+  
+  ret = data.frame(ab_ws, ba_ws, obp_ws, slg_ws, ops_ws, ab_wos, ba_wos, obp_wos, slg_wos, ops_wos)
+  return(ret)
+}
 
+
+graph_shift_stats = function(table){
+  temp <- data.frame(type=c("AVG", "AVG", "OBP", "OBP", "SLG", "SLG", "OPS", "OPS"),
+                     col =c("Shift", "No Shift", "Shift", "No Shift", "Shift", "No Shift", "Shift", "No Shift"),
+                     data = c(table$ba_ws, table$ba_wos, table$obp_ws, table$obp_wos, table$slg_ws, table$slg_wos, table$ops_ws, table$ops_wos))
+  
+  ggplot(temp, aes(x=factor(type, level=c("AVG", "OBP", "SLG", "OPS")), y=data, fill=col))+
+    geom_col(position = position_dodge())+
+    scale_fill_manual(values= c("#3db5ff", "#0099f9"), name ="")+
+    geom_text(aes(label=data), position = position_dodge(0.9), vjust=-.5, size = 4)+
+    labs(x="", y="", title = "Slash Line With and Without Infield Shifts")
+}
+      
 
 
 ```
@@ -158,6 +216,7 @@ run_shiny = function() {
             actionButton("run1", "Generate")
           ),
           uiOutput("text1"),
+          tags$head(tags$style("#text1{font-size: 15px; text-align: center;}")),
           tableOutput("main_stats"),
           plotOutput("slash")
         ),
@@ -167,7 +226,12 @@ run_shiny = function() {
             textInput("player2", "Choose a Player:"),
             actionButton("run2", "Generate")),
           uiOutput("text2"),
-          plotOutput("spray", width = 500, height = 500)
+          tags$head(tags$style("#text2{font-size: 20px; text-align: center;}")),
+          fluidRow(splitLayout(
+            plotOutput("spray", width = 500, height = 500),
+            plotOutput("shift_bar", width = 500, height = 500)
+          ))
+          
         )
       )
       )
@@ -204,10 +268,10 @@ run_shiny = function() {
                      "No. ", calc_rank(curr_player_br_table, "OBP")[[1]][1], " in on-base percentage (top ", calc_rank(curr_player_br_table, "OBP")[[2]][1], "%),", "<br>", 
                      "No. ", calc_rank(curr_player_br_table, "SLG")[[1]][1], " in slugging percentage (top ", calc_rank(curr_player_br_table, "SLG")[[2]][1], "%),", "<br>", 
                      " No. ", calc_rank(curr_player_br_table, "OPS")[[1]][1], " in on-base + slugging (top ", calc_rank(curr_player_br_table, "OPS")[[2]][1], "%).", "<br>", 
-                     "*Amoung qualified players"))
+                    "<br>", " "))
           }
           else{
-            output$text1 <- renderText(paste0("<b>", input$player1, " ranks No.", "</b>", calc_rank(curr_player_br_table, "R")[1], " in runs, No.", calc_rank(curr_player_br_table, "H")[1], " in hits, No.", calc_rank(curr_player_br_table, "RBI")[1], " in RBIs."))
+            output$text1 <- renderText(paste0("<b>", input$player1, " ranks No.", "</b>", calc_rank(curr_player_br_table, "R")[1], " in runs, No.", calc_rank(curr_player_br_table, "H")[1], " in hits, No.", calc_rank(curr_player_br_table, "RBI")[1], " in RBIs.", "<br>", " "))
           }
           output$main_stats <- renderTable(curr_player_br_table)
           output$slash <- renderPlot(graph_slashline2(curr_player_br_table))
@@ -239,10 +303,12 @@ run_shiny = function() {
             select(Name, Age, Team, G, PA, AB, R, H, Singles, Doubles, Triples, HR, RBI, BB, SO, HBP, SB, BA, OBP, SLG, OPS)
           
           player_shifts = shift_perc(player_savant_table, curr_player_br_table)
+          shift_slash = get_shift_stats(player_savant_table)
           
           output$text2 <- renderText(paste0("<b>", input$player2, " has been shifted on ",  "</b>", player_shifts$perc_byab, "% of his at-bats (",
-                                            player_shifts$perc_standard_byab, "-", player_shifts$perc_strategic_byab, ", Standard-stretegic shifts)."))
+                                            player_shifts$perc_standard_byab, "-", player_shifts$perc_strategic_byab, ", Standard-Strategic shifts).", "<br>", " "))
           output$spray <- renderPlot(spraychart(player_savant_table))
+          output$shift_bar <- renderPlot(graph_shift_stats(shift_slash))
         }
         else output$text1 <- renderText("Please enter a valid player name.")
       })
