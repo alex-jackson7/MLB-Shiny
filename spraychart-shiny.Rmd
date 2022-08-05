@@ -5,11 +5,11 @@ date: '2022-07-22'
 ---
 
 ```{r data}
-#devtools::install_github("BillPetti/baseballr")
 library(baseballr)
 library(tidyverse)
 library(ggplot2)
 library(reshape2)
+library(shiny)
 start <- "2022-04-07"
 current <- Sys.Date()
 br_data <- daily_batter_bref(start, current)
@@ -20,15 +20,6 @@ savant <- scrape_statcast_savant_batter_all(start, current) %>%
                             grepl("triple", des) ~ "Triple",
                             grepl("homer", des) | grepl("grand slam", des)~ "Homerun"),
          first_last = paste(gsub("^.+\\,","", player_name),gsub("\\,.+$","", player_name),sep=" "))
-
-
-#Ian Happ br_data for testing purposes
-happ <- br_data %>% 
-          filter(Name == "Ian Happ") %>% 
-           rename("Singles"=X1B,
-                  "Doubles"=X2B,
-                  "Triples"=X3B) %>% 
-           select(Name, Age, Team, G, PA, AB, R, H, Singles, Doubles, Triples, HR, RBI, BB, SO, HBP, SB, BA, OBP, SLG, OPS)
 
 #league average data table
 league_ave <- br_data %>%
@@ -46,6 +37,16 @@ qualifiers <- br_data %>%
   mutate(ABPG = AB/G) %>% #should be 3.1AB/Team game played, but not sure how to get that
   filter(ABPG >= 3.1)
 
+willy <- scrape_statcast_savant(start, current, playerid = playerid_lookup(last_name = "Contreras", first_name = "Willson")$mlbam_id)
+willy_br <- br_data %>% filter(Name == "Willson Contreras")
+cs <- scrape_statcast_savant(start, current, playerid = playerid_lookup(last_name = "Seager", first_name = "Corey")$mlbam_id) %>% 
+            mutate(result = case_when(grepl("out", des) | grepl("error", des) | grepl("fielder's choice", des) ~ "Out",
+                                      grepl("single", des) ~"Single",
+                                      grepl("double", des) ~"Double",
+                                      grepl("triple", des) ~ "Triple",
+                                      grepl("homer", des) | grepl("grand slam", des)~ "Homerun"))
+cs_br <- br_data %>% 
+  filter(Name == "Corey Seager")
 ```
 
 ```{r functions}
@@ -61,10 +62,6 @@ graph_slashline2 = function(pt){
     labs(x="", y="", title = paste0("Slash Line of ", pt$Name, " Against League Average"))
 }
 
-#test--move out after
-graph_slashline2(happ)
-
-
 #Gets stat rankings
 calc_rank = function(pt, stat){
   if(stat %in% c("BA", "OBP", "SLG", "OPS")){
@@ -77,9 +74,6 @@ calc_rank = function(pt, stat){
   }
   return(ret)
 }
-
-#test--move out later 
-calc_rank(happ, "BA")
 
 #Get spray chart
 spraychart <- function(pt)
@@ -94,61 +88,48 @@ spraychart <- function(pt)
                     values= c("#c62828", "#fdd835", "#1976d2", "#388e3c", "#ffa726"), 
                     name="")
 
-savant_ia2 %>% 
-  count(if_fielding_alignment)
-
 #get shift percentage
 shift_perc = function(pt, pt2){
   shift <- pt %>% 
-    filter(if_fielding_alignment != "Standard") %>% 
-    count()
-  
-  ab_shift <- pt %>% 
-    filter(if_fielding_alignment != "Standard",
-           events != "",
-           events != "caught_stealing_2b",
-           events != "caught_stealing_3b",
-           events != "walk",
-           events != "hit_by_pitch",
-           events != "sac_fly") %>% 
-    count()
-  
-  if_shift <- pt %>% 
     filter(if_fielding_alignment == "Infield shift") %>% 
     count()
   
-  ab_if_shift <- pt %>% 
+  pa_shift <- pt %>% 
     filter(if_fielding_alignment == "Infield shift",
            events != "",
            events != "caught_stealing_2b",
-           events != "caught_stealing_3b",
-           events != "walk",
-           events != "hit_by_pitch",
-           events != "sac_fly") %>% 
+           events != "caught_stealing_3b") %>% 
     count()
   
   strat_shift <- pt %>% 
     filter(if_fielding_alignment == "Strategic") %>% 
     count()
   
-  ab_strat_shift <- pt %>% 
+  pa_strat_shift <- pt %>% 
     filter(if_fielding_alignment == "Strategic",
            events != "",
            events != "caught_stealing_2b",
-           events != "caught_stealing_3b",
-           events != "walk",
-           events != "hit_by_pitch",
-           events != "sac_fly") %>% 
+           events != "caught_stealing_3b") %>% 
     count()
   
-  perc_byplay = round(shift$n*100/nrow(pt), 2)
-  perc_byab = round(ab_shift$n*100/pt2$AB, 2)
-  perc_standard_byplay = round(if_shift$n*100/nrow(pt), 2) #maybe shift?
-  perc_standard_byab = round(ab_if_shift$n*100/pt2$AB, 2)
-  perc_strategic_byplay = round(strat_shift$n*100/nrow(pt), 2)
-  perc_strategic_byab = round(ab_strat_shift$n*100/pt2$AB, 2)
+  pa_no_shift <- pt %>% 
+    filter(if_fielding_alignment != "Infield shift",
+           events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b") %>% 
+    count()
   
-  ret = data.frame(perc_byplay, perc_byab, perc_standard_byplay, perc_standard_byab, perc_strategic_byplay, perc_strategic_byab)
+  pa_shift = pa_shift$n
+  pa_no_shift = pa_no_shift$n
+  
+  perc_byplay = round(shift$n*100/nrow(pt), 2)
+  perc_bypa = round((pa_shift*100)/(pa_shift+pa_no_shift), 2)
+  perc_strategic_byplay = round((strat_shift$n*100)/nrow(pt), 2)
+  perc_strategic_bypa = round((pa_strat_shift$n*100)/(pa_no_shift+pa_shift), 2)
+  
+
+  
+  ret = data.frame(pa_shift, pa_no_shift, perc_byplay, perc_bypa, perc_strategic_byplay, perc_strategic_bypa)
   return(ret)
 }
 
@@ -196,13 +177,49 @@ graph_shift_stats = function(table){
     geom_text(aes(label=data), position = position_dodge(0.9), vjust=-.5, size = 4)+
     labs(x="", y="", title = "Slash Line With and Without Infield Shifts")
 }
-      
+    
+get_splits = function(sav_table){
+  lefty <- sav_table %>% 
+    filter(p_throws == "L",
+           events != "",
+           events != "caught_stealing_2b",
+           events != "caught_stealing_3b")
+  
+temp = data.frame(Name = "Vs. Lefties", Age = "-", Team = "-", G = "-", PA = nrow(lefty), AB = nrow(lefty)-sum(lefty$events=="hit_by_pitch")-sum(lefty$events == "sac_fly")-sum(lefty$events == "walk"), R= "-", H = sum(lefty$events == "single")+sum(lefty$events == "double")+sum(lefty$events == "triple")+sum(lefty$events == "home_run"), Singles = sum(lefty$events == "single"), Doubles = sum(lefty$events == "double"), Triples = sum(lefty$events == "triple"), HR = sum(lefty$events == "home_run"), RBI = "-", BB = sum(lefty$events == "walk"), SO = sum(lefty$events == "strikeout"), HBP = sum(lefty$events == "hit_by_pitch"), SB = "-")
+                  
+BA = round(temp$H/temp$AB, 3)
+OBP = round((temp$H+temp$BB+temp$HBP)/temp$PA, 3)
+SLG = round((temp$Singles+2*temp$Doubles+3*temp$Triples+4*temp$HR)/temp$AB, 3)
+OPS = OBP+SLG
 
+temp = data.frame(temp, BA, OBP, SLG, OPS)
+
+righty <- sav_table %>% 
+  filter(p_throws == "R",
+          events != "",
+          events != "caught_stealing_2b",
+          events != "caught_stealing_3b")
+  
+temp2 = data.frame(Name = "Vs. Righties", Age = "-", Team = "-", G = "-", PA = nrow(righty), AB = nrow(righty)-sum(righty$events=="hit_by_pitch")-sum(righty$events == "sac_fly")-sum(righty$events == "walk"), R= "-", H = sum(righty$events == "single")+sum(righty$events == "double")+sum(righty$events == "triple")+sum(righty$events == "home_run"), Singles = sum(righty$events == "single"), Doubles = sum(righty$events == "double"), Triples = sum(righty$events == "triple"), HR = sum(righty$events == "home_run"), RBI = "-", BB = sum(righty$events == "walk"), SO = sum(righty$events == "strikeout"), HBP = sum(righty$events == "hit_by_pitch"), SB = "-")
+                  
+BA = round(temp2$H/temp2$AB, 3)
+OBP = round((temp2$H+temp2$BB+temp2$HBP)/temp2$PA, 3)
+SLG = round((temp2$Singles+2*temp2$Doubles+3*temp2$Triples+4*temp2$HR)/temp2$AB, 3)
+OPS = OBP+SLG
+
+temp2 = data.frame(temp2, BA, OBP, SLG, OPS)
+
+ret <- rbind(temp, temp2)
+  
+return(ret)
+}   
+
+get_splits(cs) 
 
 ```
 
-```{r}
-library(shiny)
+```{r Shiny}
+current = Sys.Date()
 
 run_shiny = function() {
   shinyApp(
@@ -243,9 +260,9 @@ run_shiny = function() {
         if(input$player1 %in% br_data$Name){
           
           #get tables
-          #first_last <- as.data.frame(str_split(input$player1, ' '))
-          #player_id_table <- playerid_lookup(first_last[2, 1], first_last[1, 1])
-          #player_savant_table <- scrape_statcast_savant_batter(start, current, player_id_table$mlbam_id)
+          first_last <- as.data.frame(str_split(input$player1, ' '))
+          player_id_table <- playerid_lookup(first_last[2, 1], first_last[1, 1])
+          player_savant_table <- scrape_statcast_savant_batter(start, current, player_id_table$mlbam_id)
           curr_player_br_table <- br_data %>% 
             filter(Name == input$player1) %>% 
             rename("Singles"=X1B,
@@ -273,7 +290,9 @@ run_shiny = function() {
           else{
             output$text1 <- renderText(paste0("<b>", input$player1, " ranks No.", "</b>", calc_rank(curr_player_br_table, "R")[1], " in runs, No.", calc_rank(curr_player_br_table, "H")[1], " in hits, No.", calc_rank(curr_player_br_table, "RBI")[1], " in RBIs.", "<br>", " "))
           }
-          output$main_stats <- renderTable(curr_player_br_table)
+          
+          splits <- rbind(curr_player_br_table, get_splits(player_savant_table))
+          output$main_stats <- renderTable(splits)
           output$slash <- renderPlot(graph_slashline2(curr_player_br_table))
         }
         else output$text1 <- renderText("Please enter a valid player name.")
@@ -285,12 +304,12 @@ run_shiny = function() {
           first_last <- as.data.frame(str_split(input$player2, ' '))
           player_id_table <- playerid_lookup(first_last[2, 1], first_last[1, 1]) 
           player_savant_table <- scrape_statcast_savant_batter(start, current, player_id_table$mlbam_id) %>% 
-            filter(!is.na(hc_x)) %>% 
             mutate(result = case_when(grepl("out", des) | grepl("error", des) | grepl("fielder's choice", des) ~ "Out",
                                       grepl("single", des) ~"Single",
                                       grepl("double", des) ~"Double",
                                       grepl("triple", des) ~ "Triple",
                                       grepl("homer", des) | grepl("grand slam", des)~ "Homerun"))
+          
           curr_player_br_table <- br_data %>% 
             filter(Name == input$player2) %>% 
             rename("Singles"=X1B,
@@ -305,9 +324,8 @@ run_shiny = function() {
           player_shifts = shift_perc(player_savant_table, curr_player_br_table)
           shift_slash = get_shift_stats(player_savant_table)
           
-          output$text2 <- renderText(paste0("<b>", input$player2, " has been shifted on ",  "</b>", player_shifts$perc_byab, "% of his at-bats (",
-                                            player_shifts$perc_standard_byab, "-", player_shifts$perc_strategic_byab, ", Standard-Strategic shifts).", "<br>", " "))
-          output$spray <- renderPlot(spraychart(player_savant_table))
+          output$text2 <- renderText(paste0("<b>", input$player2, "</b>", " has been shifted on ", player_shifts$perc_bypa, "% of his at-bats (", player_shifts$pa_shift, " plate appearances). He has not been shifted against in ", (100-player_shifts$perc_bypa), "% of his plate appearances (", player_shifts$pa_no_shift, " plate appearances, ", player_shifts$perc_strategic_bypa, "% strategic \"shifts\").", "<br>", " "))
+          output$spray <- renderPlot(spraychart(player_savant_table %>% filter(!is.na(hc_x))))
           output$shift_bar <- renderPlot(graph_shift_stats(shift_slash))
         }
         else output$text1 <- renderText("Please enter a valid player name.")
