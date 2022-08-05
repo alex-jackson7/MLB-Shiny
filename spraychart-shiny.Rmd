@@ -13,13 +13,6 @@ library(shiny)
 start <- "2022-04-07"
 current <- Sys.Date()
 br_data <- daily_batter_bref(start, current)
-savant <- scrape_statcast_savant_batter_all(start, current) %>%
-  mutate(result = case_when(grepl("out", des) | grepl("error", des) | grepl("fielder's choice", des) ~ "Out",
-                            grepl("single", des) ~"Single",
-                            grepl("double", des) ~"Double",
-                            grepl("triple", des) ~ "Triple",
-                            grepl("homer", des) | grepl("grand slam", des)~ "Homerun"),
-         first_last = paste(gsub("^.+\\,","", player_name),gsub("\\,.+$","", player_name),sep=" "))
 
 #league average data table
 league_ave <- br_data %>%
@@ -214,7 +207,16 @@ ret <- rbind(temp, temp2)
 return(ret)
 }   
 
-get_splits(cs) 
+graph_splits = function(pt){
+    nt <- data.frame(type=c("AVG", "AVG", "OBP", "OBP", "SLG", "SLG", "OPS", "OPS"),
+                   temp =c("Vs. Lefties", "Vs. Righties", "Vs. Lefties", "Vs. Righties", "Vs. Lefties", "Vs. Righties", "Vs. Lefties", "Vs. Righties"),
+                   data = c(pt$BA[2], pt$BA[3], pt$OBP[2], pt$OBP[3], pt$SLG[2], pt$SLG[3], pt$OPS[2], pt$OPS[3]))
+  ggplot(nt, aes(x=factor(type, level=c("AVG", "OBP", "SLG", "OPS")), y=data, fill=temp))+
+    geom_col(position = position_dodge())+
+    scale_fill_manual(values= c("#3db5ff", "#0099f9"), name ="")+
+    geom_text(aes(label=data), position = position_dodge(0.9), vjust=-.5, size = 4)+
+    labs(x="", y="", title = paste0("Lefty-Righty Slash Line of ", pt$Name))
+}
 
 ```
 
@@ -235,7 +237,10 @@ run_shiny = function() {
           uiOutput("text1"),
           tags$head(tags$style("#text1{font-size: 15px; text-align: center;}")),
           tableOutput("main_stats"),
-          plotOutput("slash")
+          fluidRow(splitLayout(
+            plotOutput("slash", width = 500, height = 500),
+            plotOutput("split_slash", width = 500, height = 500)
+          ))
         ),
         tabPanel(
           "Hit distrubion",
@@ -294,6 +299,7 @@ run_shiny = function() {
           splits <- rbind(curr_player_br_table, get_splits(player_savant_table))
           output$main_stats <- renderTable(splits)
           output$slash <- renderPlot(graph_slashline2(curr_player_br_table))
+          output$split_slash <- renderPlot(graph_splits(splits))
         }
         else output$text1 <- renderText("Please enter a valid player name.")
       })
